@@ -199,26 +199,39 @@ def obtenerLineasCercanas(cy, alturas_pentagrama):
     return pentagramas[0]
 
 """
-IDENTIFICAR NOTA MUSICAL
-Calcula qué nota es comparando su altura (cy) con las 5 líneas de su pentagrama.
+IDENTIFICAR NOTA MUSICAL (Por Proximidad Geométrica Directa)
+Compara la coordenada 'cy' de la nota con las posiciones teóricas exactas 
+de cada línea y espacio, seleccionando el escalón más cercano.
 """
 def identificarNota(cy, lineas_pentagrama):
-    # Calculamos la distancia media entre líneas
-    distancia_media = (lineas_pentagrama[4] - lineas_pentagrama[0]) / 4.0
+    L0, L1, L2, L3, L4 = lineas_pentagrama
     
-    # El "paso" musical (de línea a espacio) es la mitad de esa distancia
-    paso_musical = distancia_media / 2.0
+    distancia_media = (L4 - L0) / 4.0
+    paso = distancia_media / 2.0
     
-    # Tomamos la línea inferior (la 5ª) como referencia.
-    linea_referencia = lineas_pentagrama[4]
+    # COMPENSACIÓN DE CENTROIDE:
+    # Las plicas y la morfología tiran del centro 'cy' hacia arriba (Y menor).
+    # Sumamos 0.55 * paso para empujar el centroide a su coordenada real.
+    cy_corregido = cy + (0.55 * paso)
     
-    # Calculamos el escalón exacto con decimales
-    escalon_bruto = (linea_referencia - cy) / paso_musical
+    # Mapa de alturas Y teóricas
+    posiciones_y = {
+        -2: L4 + distancia_media,   # DO (línea adicional inferior)
+        -1: L4 + paso,              # RE (espacio inferior)
+         0: L4,                     # MI (1ª línea)
+         1: (L4 + L3) / 2.0,        # FA (1º espacio)
+         2: L3,                     # SOL (2ª línea)
+         3: (L3 + L2) / 2.0,        # LA (2º espacio)
+         4: L2,                     # SI (3ª línea)
+         5: (L2 + L1) / 2.0,        # DO5 (3º espacio)
+         6: L1,                     # RE5 (4ª línea)
+         7: (L1 + L0) / 2.0,        # MI5 (4º espacio)
+         8: L0,                     # FA5 (5ª línea)
+         9: L0 - paso               # SOL5 (espacio superior)
+    }
     
-    # En lugar de redondear, sumamos un pequeño margen de 0.2 (para compensar el 
-    # engrosamiento de los filtros morfológicos) y "cortamos" todos los decimales.
-    # Esto elimina las dudas de Python y encaja cada nota en su casilla exacta.
-    escalon = math.floor(escalon_bruto + 0.2)
+    # Seleccionamos el escalón teóricamente más cercano
+    escalon_mas_cercano = min(posiciones_y.keys(), key=lambda e: abs(posiciones_y[e] - cy_corregido))
     
     diccionario_notas = {
         -2: "DO", -1: "RE", 0: "MI", 1: "FA",
@@ -226,7 +239,7 @@ def identificarNota(cy, lineas_pentagrama):
         6: "RE5", 7: "MI5", 8: "FA5", 9: "SOL5"
     }
     
-    return diccionario_notas.get(escalon, "?")
+    return diccionario_notas.get(escalon_mas_cercano, "?")
 
 """
 Colorear notas y transparencia.
@@ -361,8 +374,8 @@ def reproducirMelodia(datos_notas, alturas_pentagrama):
 #----------------------------------------------------------------------------
 if __name__ == "__main__":
 
-    #ruta = '.\prueba\partituraCumpleFeliz.png'
-    ruta = '.\prueba\partituraEstrellita2.png'
+    ruta = '.\prueba\partituraCumpleFeliz.png'
+    #ruta = '.\prueba\partituraEstrellita2.png'
 
     # Ejecutamos Módulo 1
     img_original, img_umbral = intercambiarColores(ruta)
