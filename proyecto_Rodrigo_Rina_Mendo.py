@@ -94,41 +94,40 @@ Utiliza operaciones morfológicas con un kernel elíptico para borrar las línea
 y dejar solo las cabezas de las notas. Luego busca los contornos y filtra por área.
 """
 def detectarNotas(img_umbral):
-    # Creamos el "molde" elíptico para las notas. 
-    # Un tamaño de (15, 15) o (10, 10) suele funcionar bien para las cabezas de las notas.
-    kernel_notas = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
-    
-    # Rellenamos los huecos de las notas "blancas" para que sean manchas sólidas
+    # Rellenamos huecos (blancas y redondas)
     kernel_relleno = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     img_lista_para_erosionar = cv2.dilate(img_umbral, kernel_relleno, iterations=1)
 
-    # Aplicamos erosión sobre img_umbral para borrar líneas finas y plicas.
-    img_notas_erosion = cv2.erode(img_lista_para_erosionar, kernel_notas, iterations=1)
-    
-    # Aplicamos dilatación para que las cabezas de nota recuperen su tamaño original.
-    img_notas_aisladas = cv2.dilate(img_notas_erosion, kernel_notas, iterations=1)
+    # DESTRUCCIÓN DE PLICAS Y BARRAS
+    kernel_notas = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    # Aplicamos 2 iteraciones de erosión para "cortar" los palos definitivamente
+    img_notas_erosion = cv2.erode(img_lista_para_erosionar, kernel_notas, iterations=2)
+    # Dilatamos también 2 veces para recuperar la masa de las cabezas aisladas
+    img_notas_aisladas = cv2.dilate(img_notas_erosion, kernel_notas, iterations=2)
 
-    # Buscamos los contornos en la imagen donde solo quedan las notas.
     contornos, _ = cv2.findContours(img_notas_aisladas, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     notas_validas = []
     
-    # Filtramos el ruido por tamaño (área)
     for contorno in contornos:  
         area = abs(cv2.contourArea(contorno))
-        
-        # Obtenemos la caja que encierra la mancha
         x, y, w, h = cv2.boundingRect(contorno)
-        
-        # Calculamos la relación de aspecto (Ancho / Alto)
-        # Una figura redonda tendrá un valor cercano a 1.0
         proporcion = w / float(h)
         
-        # Exigimos que cumpla el área Y que tenga forma redondeada (entre 0.8 y 1.5)
-        if x > 100 and 100 < area < 350 and 0.8 <= proporcion <= 1.5:
+        print(f"Figura en X={x} -> Área: {area}, Proporción: {proporcion:.2f}")
+
+        # CALCULAMOS LA SOLIDEZ (Área real / Área de la caja)
+        area_caja = w * h
+        if area_caja > 0:
+            solidez = area / float(area_caja)
+        else:
+            solidez = 0
+
+        # Ampliamos ligeramente los rangos de área (hasta 450) y proporción (0.8 a 1.6)
+        # para aceptar las cabezas puras generadas tras el corte severo.
+        if x > 80 and 120 < area < 400 and 0.8 <= proporcion <= 1.6 and solidez > 0.62:
             notas_validas.append(contorno)
             
-    # Devolvemos la imagen con las manchas (para visualizarla) y la lista de contornos buenos
     return img_notas_aisladas, notas_validas
 
 """
@@ -137,41 +136,29 @@ Obtiene las coordenadas (x, y, w, h) y el centro (cx, cy) de cada nota válida
 usando cajas delimitadoras (bounding boxes). Ordena las notas de izquierda a derecha.
 """
 def ubicarNotas(img_original, contornos_notas):
-    # Hacemos una copia de la imagen a color para no pintar sobre la original
     img_resultado = img_original.copy()
-    
-    # Lista donde guardaremos la información geométrica de cada nota
     datos_notas = []
     
-    # Recorremos los contornos que superaron el filtro en el Paso 4
     for contorno in contornos_notas:
         x, y, w, h = cv2.boundingRect(contorno)
-    
-        # centro = origen + (mitad del tamaño)
-        cx = x + (w // 2)
-        cy = y + (h // 2)
-
-        # Variables del rectángulo
-        punto_ini = (int (x), int(y))
-        punto_fin = (int (x+w), int (y+h))
-        colorRec = (0,255,0)
-
-        # Variables del círculo:
-        centro = (int (cx), int (cy))
-        colorCir = (0,0,255)
-
-        # Coordenadas: punto inicial (x, y), punto final (x+w, y+h). Color verde: (0, 255, 0). Grosor: 2
-        cv2.rectangle(img_resultado, punto_ini, punto_fin, colorRec, 2)
         
-        # Radio: 3. Color rojo: (0, 0, 255). Grosor: -1 (para que esté relleno)
-        cv2.circle(img_resultado, centro, 3, colorCir, -1)
+        # Calculamos los momentos para extraer el centro de masa físico real
+        M = cv2.moments(contorno)
+        if M["m00"] != 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+        else:
+            cx = x + (w // 2)
+            cy = y + (h // 2)
+
+        # Dibujamos rectángulo y centroide
+        cv2.rectangle(img_resultado, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.circle(img_resultado, (cx, cy), 3, (0, 0, 255), -1)
         
-        # Guardamos todas las coordenadas de esta nota en un diccionario y lo añadimos a la lista
+        # Guardamos 'h' para usarlo de forma dinámica en el radio
         datos_notas.append({'cx': cx, 'cy': cy, 'x': x, 'y': y, 'w': w, 'h': h})
         
-    # Pista en Python: datos_notas.sort(key=lambda nota: nota['cx'])
     datos_notas.sort(key=lambda nota: nota['cx'])
-
     return img_resultado, datos_notas
 
 """
@@ -209,29 +196,24 @@ def identificarNota(cy, lineas_pentagrama):
     distancia_media = (L4 - L0) / 4.0
     paso = distancia_media / 2.0
     
-    # COMPENSACIÓN DE CENTROIDE:
-    # Las plicas y la morfología tiran del centro 'cy' hacia arriba (Y menor).
-    # Sumamos 0.55 * paso para empujar el centroide a su coordenada real.
-    cy_corregido = cy + (0.55 * paso)
-    
-    # Mapa de alturas Y teóricas
+    # Mapa de posiciones Y teóricas absolutas
     posiciones_y = {
-        -2: L4 + distancia_media,   # DO (línea adicional inferior)
-        -1: L4 + paso,              # RE (espacio inferior)
+        -2: L4 + distancia_media,   # DO (línea adicional)
+        -1: L4 + paso,              # RE
          0: L4,                     # MI (1ª línea)
-         1: (L4 + L3) / 2.0,        # FA (1º espacio)
+         1: (L4 + L3) / 2.0,        # FA
          2: L3,                     # SOL (2ª línea)
-         3: (L3 + L2) / 2.0,        # LA (2º espacio)
+         3: (L3 + L2) / 2.0,        # LA
          4: L2,                     # SI (3ª línea)
-         5: (L2 + L1) / 2.0,        # DO5 (3º espacio)
+         5: (L2 + L1) / 2.0,        # DO5
          6: L1,                     # RE5 (4ª línea)
-         7: (L1 + L0) / 2.0,        # MI5 (4º espacio)
+         7: (L1 + L0) / 2.0,        # MI5
          8: L0,                     # FA5 (5ª línea)
-         9: L0 - paso               # SOL5 (espacio superior)
+         9: L0 - paso               # SOL5
     }
     
-    # Seleccionamos el escalón teóricamente más cercano
-    escalon_mas_cercano = min(posiciones_y.keys(), key=lambda e: abs(posiciones_y[e] - cy_corregido))
+    # Asignación por mínima distancia euclídea pura
+    escalon_mas_cercano = min(posiciones_y.keys(), key=lambda e: abs(posiciones_y[e] - cy))
     
     diccionario_notas = {
         -2: "DO", -1: "RE", 0: "MI", 1: "FA",
@@ -261,8 +243,8 @@ def colorearNotas(img_original, datos_notas, alturas_pentagrama):
     }
     
     for nota in datos_notas:
-        cx, cy, w = nota['cx'], nota['cy'], nota['w']
-        radio = w // 2
+        cx, cy, h = nota['cx'], nota['cy'], nota['h']
+        radio = max(3, h // 2)
         
         # Pedimos dinámicamente las 5 líneas que corresponden a la altura de esta nota
         lineas = obtenerLineasCercanas(cy, alturas_pentagrama)
@@ -374,8 +356,9 @@ def reproducirMelodia(datos_notas, alturas_pentagrama):
 #----------------------------------------------------------------------------
 if __name__ == "__main__":
 
-    ruta = '.\prueba\partituraCumpleFeliz.png'
+    #ruta = '.\prueba\partituraCumpleFeliz.png'
     #ruta = '.\prueba\partituraEstrellita2.png'
+    ruta = '.\prueba\partituraPinpon.jpg'
 
     # Ejecutamos Módulo 1
     img_original, img_umbral = intercambiarColores(ruta)
