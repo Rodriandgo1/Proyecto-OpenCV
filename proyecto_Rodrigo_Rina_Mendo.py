@@ -150,78 +150,83 @@ def sustraerPentagramaYCicatrizar(img_umbral, img_lineas, T):
 Aislar y detectar las notas musicales.
 Utiliza operaciones morfológicas con un kernel elíptico para borrar las líneas
 y dejar solo las cabezas de las notas. Luego busca los contornos y filtra por área.
+Rellena las blancas limpiamente sobre la imagen sin pentagrama
+y aisla cabezas simetricas eliminando plicas mediante Apertura Morfologica.
 """
-def detectarNotas(img_umbral, S, alturas_pentagrama, x_inicio):
-    img_trabajo = img_umbral.copy()
+def detectarNotas(img_cicatrizada, S, alturas_pentagrama, x_inicio):
+    img_trabajo = img_cicatrizada.copy()
 
-    # Relleno de blancas
+    # -------------------------------------------------------------
+    # FASE 3: RELLENO TOPOLÓGICO DE BLANCAS
+    # -------------------------------------------------------------
+    # Al no haber lineas de pentagrama, las blancas son anillos cerrados perfectos
     contornos_todos, jerarquia = cv2.findContours(img_trabajo, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    
     if jerarquia is not None:
         for i in range(len(contornos_todos)):
             indice_padre = jerarquia[0][i][3]
+            # Si tiene padre, es un hueco interior
             if indice_padre != -1:
                 area_hueco = cv2.contourArea(contornos_todos[i])
                 area_min_hueco = 0.05 * (S ** 2)
-                area_max_hueco = 0.70 * (S ** 2)
+                area_max_hueco = 0.85 * (S ** 2)
+                
                 if area_min_hueco < area_hueco < area_max_hueco:
                     cv2.drawContours(img_trabajo, contornos_todos, i, 255, thickness=cv2.FILLED)
 
-    # Corte de plicas
-    tamano_kernel = int(round(0.35 * S))
-    if tamano_kernel % 2 == 0:
-        tamano_kernel = tamano_kernel + 1
-    if tamano_kernel < 3:
-        tamano_kernel = 3
+    # -------------------------------------------------------------
+    # FASE 4: APERTURA MORFOLÓGICA (ELIMINACIÓN RADICAL DE PALOS Y VIGAS)
+    # -------------------------------------------------------------
+    # Creamos un molde eliptico de tamano medio (~0.52 * S).
+    # Es mas grueso que cualquier palo o barra, pero cabe dentro de la cabeza de la nota.
+    tamano_molde = int(round(0.52 * S))
+    if tamano_molde % 2 == 0:
+        tamano_molde = tamano_molde + 1
+    if tamano_molde < 3:
+        tamano_molde = 3
         
-    kernel_corte = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (tamano_kernel, tamano_kernel))
-    img_erosion = cv2.erode(img_trabajo, kernel_corte, iterations=1)
-    img_notas_aisladas = cv2.dilate(img_erosion, kernel_corte, iterations=1)
+    molde_nota = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (tamano_molde, tamano_molde))
+    
+    # MORPH_OPEN = Erosion (borra palos y rebabas) + Dilatacion (devuelve forma a la cabeza)
+    img_notas_puras = cv2.morphologyEx(img_trabajo, cv2.MORPH_OPEN, molde_nota)
 
-    # Filtrado geometrico
-    contornos_candidatos, _ = cv2.findContours(img_notas_aisladas, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # -------------------------------------------------------------
+    # FILTRADO Y EXTRACCIÓN DE CONTORNOS LIMPIOS
+    # -------------------------------------------------------------
+    contornos_candidatos, _ = cv2.findContours(img_notas_puras, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     notas_validas = []
     
-    area_minima_nota = 0.20 * (S ** 2)
-    area_maxima_nota = 2.00 * (S ** 2)
-    # La zona de clave y compas ocupa los primeros 3.8 espacios a partir del inicio de la linea
-    margen_clave_x = x_inicio + int(3.8 * S)
+    area_minima = 0.20 * (S ** 2)
+    area_maxima = 2.20 * (S ** 2)
     
-    for contorno in contornos_candidatos:  
+    # Margen para descartar clave de Sol y compas (al menos 4.2 espacios interlinea)
+    margen_clave = x_inicio + int(4.2 * S)
+    
+    for contorno in contornos_candidatos:
         area = abs(cv2.contourArea(contorno))
         x, y, w, h = cv2.boundingRect(contorno)
         
-        proporcion = w / float(h)
-        area_caja = w * h
-        if area_caja > 0:
-            solidez = area / float(area_caja)
-        else:
-            solidez = 0.0
-
-        # Criterios adaptados a la escala S
-        es_tamano_correcto = area_minima_nota < area < area_maxima_nota
-        # Rango mas tolerante para notas cruzadas con lineas del pentagrama:
-        es_redondeada = 0.60 <= proporcion <= 1.80
-        es_solida = solidez > 0.55
+        # Filtro de dimensiones minimas (para eliminar cualquier mota de polvo residual)
+        ancho_valido = w >= int(0.50 * S)
+        alto_valido = h >= int(0.50 * S)
+        tamano_valido = area_minima < area < area_maxima
+        esta_fuera_cabecera = x > margen_clave
         
-        # Eliminacion de trozos pequenos de corchetes (deben tener cuerpo de nota real):
-        tiene_dimension_minima = (w >= 0.55 * S) and (h >= 0.55 * S)
-        
-        esta_fuera_de_la_clave = x > margen_clave_x
-        
+        # Comprobar pertenencia a un pentagrama
         centro_y = y + (h // 2)
-        esta_en_rango_pentagrama = False
+        en_pentagrama = False
         for i in range(0, len(alturas_pentagrama), 5):
             bloque = alturas_pentagrama[i:i+5]
             if len(bloque) == 5:
-                tope_superior = bloque[0] - int(1.5 * S)
-                tope_inferior = bloque[4] + int(1.5 * S)
-                if tope_superior <= centro_y <= tope_inferior:
-                    esta_en_rango_pentagrama = True
+                limite_superior = bloque[0] - int(1.5 * S)
+                limite_inferior = bloque[4] + int(1.5 * S)
+                if limite_superior <= centro_y <= limite_inferior:
+                    en_pentagrama = True
 
-        if es_tamano_correcto and es_redondeada and es_solida and tiene_dimension_minima and esta_fuera_de_la_clave and esta_en_rango_pentagrama:
+        if tamano_valido and ancho_valido and alto_valido and esta_fuera_cabecera and en_pentagrama:
             notas_validas.append(contorno)
             
-    return img_notas_aisladas, notas_validas
+    return img_notas_puras, notas_validas
 
 """
 Ubicar la nota espacialmente.
@@ -237,18 +242,13 @@ def ubicarNotas(img_original, contornos_notas):
         
         M = cv2.moments(contorno)
         if M["m00"] != 0:
-            cx_momento = int(M["m10"] / M["m00"])
-            cy_momento = int(M["m01"] / M["m00"])
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
         else:
-            cx_momento = x + (w // 2)
-            cy_momento = y + (h // 2)
+            cx = x + (w // 2)
+            cy = y + (h // 2)
 
-        # Estabilizacion del centro vertical:
-        # Combinamos el centro de masa con el centro geometrico para anular el tiron de la plica
-        cy_caja = y + (h // 2)
-        cy = int(0.5 * cy_momento + 0.5 * cy_caja)
-        cx = cx_momento
-
+        # Dibujar caja y centroide
         cv2.rectangle(img_resultado, (x, y), (x + w, y + h), (0, 255, 0), 2)
         cv2.circle(img_resultado, (cx, cy), 3, (0, 0, 255), -1)
         
@@ -452,9 +452,9 @@ def reproducirMelodia(datos_notas, alturas_pentagrama):
 #----------------------------------------------------------------------------
 if __name__ == "__main__":
 
-    ruta = '.\prueba\partituraCumpleFeliz.png'
+    #ruta = '.\prueba\partituraCumpleFeliz.png'
     #ruta = '.\prueba\partituraEstrellita2.png'
-    #ruta = '.\prueba\partituraPinpon.jpg'
+    ruta = '.\prueba\partituraPinpon.jpg'
 
     # Ejecutamos Módulo 1
     img_original, img_umbral = intercambiarColores(ruta)
