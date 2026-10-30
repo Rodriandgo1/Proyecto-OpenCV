@@ -137,9 +137,9 @@ def sustraerPentagramaYCicatrizar(img_umbral, img_lineas, T):
     
     # Creamos un kernel vertical de 1 pixel de ancho
     # La altura debe superar el grosor T para tender un puente sobre el corte
-    alto_kernel = (2 * T) + 1
-    if alto_kernel < 3:
-        alto_kernel = 3
+    alto_kernel = (2 * T) + 3
+    if alto_kernel < 5:
+        alto_kernel = 5
         
     kernel_vertical = cv2.getStructuringElement(cv2.MORPH_RECT, (1, alto_kernel))
     
@@ -161,7 +161,7 @@ def detectarNotas(img_cicatrizada, S, alturas_pentagrama, x_inicios_pentagramas)
 
     img_trabajo = img_cicatrizada.copy()
 
-    # 1. Relleno topologico de blancas
+    # Relleno topologico de blancas
     contornos_todos, jerarquia = cv2.findContours(img_trabajo, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
     if jerarquia is not None:
         for i in range(len(contornos_todos)):
@@ -173,21 +173,18 @@ def detectarNotas(img_cicatrizada, S, alturas_pentagrama, x_inicios_pentagramas)
                 if area_min_hueco < area_hueco < area_max_hueco:
                     cv2.drawContours(img_trabajo, contornos_todos, i, 255, thickness=cv2.FILLED)
 
-    # 2. Apertura morfologica: Para escalas pequenas (S <= 10.5), limitamos a 3x3
+    # Apertura morfologica: para escalas pequeñas (S <= 10.5), limitamos a 3x3
     # para no desintegrar notas reales de baja resolucion
-    if S <= 10.5:
+    tamano_molde = int(round(0.42 * S))
+    if tamano_molde % 2 == 0:
+        tamano_molde = tamano_molde + 1
+    if tamano_molde < 3:
         tamano_molde = 3
-    else:
-        tamano_molde = int(round(0.35 * S))
-        if tamano_molde % 2 == 0:
-            tamano_molde = tamano_molde + 1
-        if tamano_molde < 3:
-            tamano_molde = 3
         
     molde_nota = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (tamano_molde, tamano_molde))
     img_notas_puras = cv2.morphologyEx(img_trabajo, cv2.MORPH_OPEN, molde_nota)
 
-    # 3. Filtrado geometrico
+    # Filtrado geometrico
     contornos_candidatos, _ = cv2.findContours(img_notas_puras, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     notas_validas = []
     
@@ -210,7 +207,7 @@ def detectarNotas(img_cicatrizada, S, alturas_pentagrama, x_inicios_pentagramas)
             solidez = 0.0
             
         es_redondeada = 0.55 <= proporcion <= 1.85
-        es_solida = solidez > 0.40
+        es_solida = solidez > 0.52
         tamano_valido = area_minima < area < area_maxima
         dimensiones_validas = (w >= ancho_minimo_nota) and (h >= alto_minimo_nota)
         
@@ -485,8 +482,8 @@ def reproducirMelodia(datos_notas, alturas_pentagrama):
 #----------------------------------------------------------------------------
 if __name__ == "__main__":
 
-    #ruta = '.\prueba\partituraCumpleFeliz.png'
-    ruta = '.\prueba\partituraEstrellita2.png'
+    ruta = '.\prueba\partituraCumpleFeliz.png'
+    #ruta = '.\prueba\partituraEstrellita2.png'
     #ruta = '.\prueba\partituraPinpon.jpg'
 
     # Ejecutamos Módulo 1
