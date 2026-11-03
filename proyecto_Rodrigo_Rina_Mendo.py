@@ -130,22 +130,17 @@ def obtenerAlturasLineas(img_lineas):
 Borra las lineas del pentagrama mediante sustraccion y cicatriza 
 los cortes horizontales de las notas usando morfologia vertical adaptada a T.
 """
-def sustraerPentagramaYCicatrizar(img_umbral, img_lineas, T):
-    # Restamos la mascara de lineas a la imagen umbralizada
+def sustraerPentagramaYCicatrizar(img_umbral, img_lineas, T, S):    # Restamos la mascara de lineas a la imagen umbralizada
     img_sin_lineas = cv2.subtract(img_umbral, img_lineas)
     
-    # Creamos un kernel vertical de 1 pixel de ancho
-    # La altura debe superar el grosor T para tender un puente sobre el corte
-    alto_kernel = (2 * T) + 3
+    # El kernel mide un 40% de S (mínimo 5 px).
+    # Suelda sobradamente los cortes de 3-4px en Cumpleaños (S=20) y en Estrellita (S=9)
+    alto_kernel = int(round(0.40 * S))
     if alto_kernel < 5:
         alto_kernel = 5
         
     kernel_vertical = cv2.getStructuringElement(cv2.MORPH_RECT, (1, alto_kernel))
-    
-    # El Cierre Morfológico (Dilatacion vertical seguida de Erosion vertical)
-    # Suelda la brecha horizontal de las cabezas sin recrear las lineas
     img_cicatrizada = cv2.morphologyEx(img_sin_lineas, cv2.MORPH_CLOSE, kernel_vertical)
-    
     return img_sin_lineas, img_cicatrizada
 
 """
@@ -246,60 +241,63 @@ def esNotaValida(contorno, S, alturas_pentagrama, x_inicios_pentagramas):
 """
 Determina la duración y figura musical según la presencia de hueco o la conexión con vigas de corcheas.
 """
-def clasificarRitmoNota(cx, cy, centros_huecos, contornos_con_palos, todas_las_notas, S):
+def clasificarRitmoNota(cx, cy, img_byn, contornos_con_palos, todas_las_notas, S):
 
-    # Primero se comprueba que tenga un hueco y por tanto es blanca
-    for (hx, hy) in centros_huecos:
-        distancia = math.hypot(cx - hx, cy - hy)
-        if distancia < (0.85 * S):
+    # ¿ES BLANCA? Inspección de brillo en el centro de la nota en la imagen original
+    radio = max(2, int(round(0.20 * S)))
+    alto_img, ancho_img = img_byn.shape
+    y_min = max(0, cy - radio)
+    y_max = min(alto_img, cy + radio + 1)
+    x_min = max(0, cx - radio)
+    x_max = min(ancho_img, cx + radio + 1)
+    
+    parche = img_byn[y_min:y_max, x_min:x_max]
+    if parche.size > 0:
+        # Una negra tiene tinta en todo el parche (media < 100).
+        # Una blanca tiene papel blanco dentro (media > 130).
+        if np.mean(parche) > 125:
             return 2.0, "BLANCA"
-            
-    # Segundo se comprueba que sea una corchea
+
+    # ¿ES CORCHEA? Comprobamos si comparte bloque ancho con otra nota
     for c_palo in contornos_con_palos:
         px, py, pw, ph = cv2.boundingRect(c_palo)
         if px <= cx <= (px + pw) and py <= cy <= (py + ph):
-            # Contamos cuántas notas caen dentro de este contorno con palos
             notas_en_este_bloque = 0
             for otra in todas_las_notas:
                 if px <= otra['cx'] <= (px + pw) and py <= otra['cy'] <= (py + ph):
                     notas_en_este_bloque = notas_en_este_bloque + 1
                     
-            # Si el bloque une 2 o más notas y es ancho, es una viga de corcheas
-            if notas_en_este_bloque >= 2 and pw >= int(1.8 * S) and ph >= int(2.0 * S):
+            if notas_en_este_bloque >= 2 and pw >= int(1.5 * S):
                 return 0.5, "CORCHEA"
                 
-    # Por defecto es una negra aislada
+    # Por defecto es una negra
     return 1.0, "NEGRA"
+
 """
 Coordina el relleno, aislamiento morfológico, filtrado y clasificación rítmica de notas.
 """
-def detectarNotas(img_cicatrizada, S, alturas_pentagrama, x_inicios_pentagramas):
+def detectarNotas(img_cicatrizada, img_byn, S, alturas_pentagrama, x_inicios_pentagramas):
+    # Relleno para que las blancas sean manchas sólidas para el contorno
+    img_rellena, _ = rellenarBlancasYRegistrarHuecos(img_cicatrizada, S)
 
-    # Relleno y registro de huecos
-    img_rellena, centros_huecos = rellenarBlancasYRegistrarHuecos(img_cicatrizada, S)
-
-    # Aislamiento de manchas puras
+    # Aislamiento de manchas
     img_notas_puras = aislarCabezasNotas(img_rellena, S)
 
-    # Detección de siluetas completas para clasificar plicas/vigas
+    # Detección de siluetas completas con plicas
     contornos_con_palos, _ = cv2.findContours(img_cicatrizada, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Evaluación de candidatos y asignación de ritmo
+    # Evaluación de candidatos
     candidatos, _ = cv2.findContours(img_notas_puras, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # Recopilamos primero los centros de todas las notas válidas
     candidatos_validos = []
     for c in candidatos:
         if esNotaValida(c, S, alturas_pentagrama, x_inicios_pentagramas):
             x, y, w, h = cv2.boundingRect(c)
-            cx = x + (w // 2)
-            cy = y + (h // 2)
-            candidatos_validos.append({'contorno': c, 'cx': cx, 'cy': cy})
+            candidatos_validos.append({'contorno': c, 'cx': x + (w // 2), 'cy': y + (h // 2)})
             
-    # Asignamos el ritmo comprobando conexiones entre ellas
     notas_validas = []
     for cand in candidatos_validos:
-        duracion, tipo = clasificarRitmoNota(cand['cx'], cand['cy'], centros_huecos, contornos_con_palos, candidatos_validos, S)
+        duracion, tipo = clasificarRitmoNota(cand['cx'], cand['cy'], img_byn, contornos_con_palos, candidatos_validos, S)
         notas_validas.append({'contorno': cand['contorno'], 'duracion': duracion, 'tipo': tipo})
             
     return img_notas_puras, notas_validas
@@ -382,7 +380,7 @@ def identificarNota(cy, lineas_pentagrama):
     
     distancia_media = (L4 - L0) / 4.0
     paso = distancia_media / 2.0
-    tolerancia_linea = 0.30 * distancia_media  # Radio de atraccion de cada linea (~3 px)
+    tolerancia_linea = 0.20 * distancia_media  # Radio de atraccion de cada linea (~3 px)
     
     # 1. Comprobacion prioritaria: ¿Cae la nota sobre alguna de las 5 lineas fisicas?
     # L4 = 1a linea (MI), L3 = 2a (SOL), L2 = 3a (SI), L1 = 4a (RE5), L0 = 5a (FA5)
@@ -548,10 +546,10 @@ def reproducirMelodia(datos_notas, alturas_pentagrama):
 if __name__ == "__main__":
 
     #ruta = '.\partituras\cumple.png'
-    #ruta = '.\partituras\oto.jpg'
     #ruta = '.\partituras\partituraEstrellita2.png'
-    ruta = '.\partituras\partituraPinpon.jpg'
+    #ruta = '.\partituras\partituraPinpon.jpg'
     #ruta = '.\partituras\partituraMarchaImperial2.png'
+    ruta = '.\partituras\Interstellar.png'
 
     # Ejecutamos Módulo 1
     img_original, img_umbral = intercambiarColores(ruta)
@@ -572,7 +570,7 @@ if __name__ == "__main__":
         print("Inicio horizontal:", x_inicios_pentagramas, "px")
 
         # FASE 2: Sustraer pentagrama y cicatrizar cortes en notas
-        img_rotas, img_cicatrizada = sustraerPentagramaYCicatrizar(img_umbral, img_lineas, T)
+        img_rotas, img_cicatrizada = sustraerPentagramaYCicatrizar(img_umbral, img_lineas, T, S)
 
         # Ventanas de diagnostico de la Fase 1 y 2
         cv2.imshow('1. Original', img_original)
@@ -581,7 +579,8 @@ if __name__ == "__main__":
         cv2.imshow('3.2 Notas Cicatrizadas (Sin Pentagrama)', img_cicatrizada)
         
         # De momento pasamos "img_cicatrizada" al detector de notas existente para ver el efecto
-        img_notas_aisladas, contornos_notas = detectarNotas(img_cicatrizada, S, alturas_pentagrama, x_inicios_pentagramas)
+        img_byn = cv2.cvtColor(img_original, cv2.COLOR_BGR2GRAY)
+        img_notas_aisladas, contornos_notas = detectarNotas(img_cicatrizada, img_byn, S, alturas_pentagrama, x_inicios_pentagramas)        
         
         # Imprimimos cuántas notas hemos encontrado
         print("Total de notas detectadas:", len(contornos_notas))
