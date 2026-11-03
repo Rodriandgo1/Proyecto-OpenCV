@@ -547,10 +547,11 @@ def reproducirMelodia(datos_notas, alturas_pentagrama):
 #----------------------------------------------------------------------------
 if __name__ == "__main__":
 
-    #ruta = '.\prueba\partituraCumpleFeliz.png'
-    ruta = '.\prueba\partituraEstrellita2.png'
-    #ruta = '.\prueba\partituraPinpon.jpg'
-    #ruta = '.\prueba\partituraMarchaImperial2.png'
+    #ruta = '.\partituras\cumple.png'
+    #ruta = '.\partituras\oto.jpg'
+    #ruta = '.\partituras\partituraEstrellita2.png'
+    ruta = '.\partituras\partituraPinpon.jpg'
+    #ruta = '.\partituras\partituraMarchaImperial2.png'
 
     # Ejecutamos Módulo 1
     img_original, img_umbral = intercambiarColores(ruta)
