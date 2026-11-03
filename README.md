@@ -2,6 +2,7 @@
 
 Sistema de visión por computador para la digitalización, análisis espacial, clasificación rítmica y reproducción acústica de partituras musicales a partir de imágenes estáticas.
 
+> [!IMPORTANT]
 > **Documentación completa:** el análisis técnico exhaustivo, la arquitectura por módulos, diagramas de flujo y la resolución de problemas técnicos se encuentran detallados en el archivo adjunto **`doc_proyecto.pdf`**.
 
 ---
