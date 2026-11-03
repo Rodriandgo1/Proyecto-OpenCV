@@ -94,4 +94,4 @@ pip install opencv-python numpy
 
 Para consultar el desglose pormenorizado de cada uno de los 14 módulos, sus diagramas de arquitectura, las problemáticas afrontadas (como la resolución de los problemas en notas blancas o la estabilización de centroides) y las líneas de trabajo futuro, consulta el documento:
     **`doc_proyecto.pdf`**
-```
+
